@@ -1,6 +1,6 @@
-# R Script for Data Analytics in Finance using R group project
+# R Script for Data Analytics in Finance using R project
 # Ver. final (initial: 2022-4-14, debug test: 2022-4-30, commit date: 2022-4-30)
-# File Update Date: 2022-4-30 (Dicky)
+# File Update Date: 2022-4-30
 
 #########################################################################
 # Initialize & import required library
