@@ -1,0 +1,922 @@
+---
+title: "R Script for Data Analytics in Finance using R - Project"
+date: "2022-04-30"
+output: html_document
+---
+
+#########################################################################
+<b>Initialize & import required libraries</b>
+```{r message=FALSE}
+rm(list=ls())
+if("dplyr" %in% rownames(installed.packages()) == FALSE)
+  install.packages("dplyr")
+library(dplyr)
+if("tidyr" %in% rownames(installed.packages()) == FALSE)
+  install.packages("tidyr")
+library(tidyr)
+if("ggplot2" %in% rownames(installed.packages()) == FALSE)
+  install.packages("ggplot2")
+library(ggplot2)
+if("gridExtra" %in% rownames(installed.packages()) == FALSE)
+  install.packages("gridExtra")
+library(gridExtra)
+```
+
+
+<b>Import dataset (master)</b>
+Data source: https://github.com/owid/covid-19-data
+
+```{r data import}
+ds <- read.csv("owid-covid-data.csv")
+```
+
+
+<b>Normalize and cleaning</b>
+
+
+Normalize Date/time
+```{r normalize}
+ds$date <- as.Date(ds$date, "%Y-%m-%d");
+```
+
+
+Filter location data and statistic data
+```{r filter location}
+dataLocation <- ds %>%
+  filter(!grepl('^OWID.*',iso_code)) %>% # Remove other data not related to continent
+  filter(date >= '2020-03-01' & date <= '2022-03-31') # Use data start from March20 (Since Feb20's data is incomplete)
+dataStat <- ds %>%
+  filter(grepl('^OWID.*',iso_code)) %>% # OWID_* is statistic data from OurWorld, we will not use this data. 
+  filter(date >= '2020-03-01' & date <= '2022-03-31')
+```
+
+
+<b>Part 1: Visualize the Data</b>
+
+
+Slide 5 - 7: Continent Level Daily Trend - new cases / new deaths / mortality rate
+```{r slide 5-7, warning=FALSE,message=FALSE}
+# Aggregate continent level data
+dataContinent <- ds %>%
+  group_by(continent, date) %>%
+  summarize(continental_new_cases=sum(new_cases_smoothed,na.rm = T),
+            continental_new_deaths=sum(new_deaths_smoothed,na.rm = T),
+            continental_new_vaccinations=sum(new_people_vaccinated_smoothed,na.rm = T),
+            continental_total_cases=sum(total_cases,na.rm=T),
+            continental_total_deaths=sum(total_deaths,na.rm=T)) %>%
+  mutate(continental_mortality_rate=continental_total_deaths/continental_total_cases)
+
+#plot line chart to show the trend of new cases, new deaths and mortality per continent
+ggplot(data = dataContinent, 
+       aes(x=date, y=continental_new_cases, group=continent)) + 
+  geom_line(aes(color=continent))+
+  labs(title="Daily New Cases Trend by Continent",x="date",y="new_cases")
+
+ggplot(data = dataContinent, 
+       aes(x=date, y=continental_new_deaths, group=continent)) + 
+  geom_line(aes(color=continent))+
+  labs(title="Daily New Deaths Trend by Continent",x="date",y="new_death")
+
+ggplot(data=dataContinent,
+       aes(x=date, y=continental_mortality_rate,group=continent)) + 
+  geom_line(aes(color=continent))+
+  labs(title="Mortality Rate Trend by Continent",x="date",y="mortality_rate")
+```
+
+
+Slide 8-9: Global Distribution of total Deaths and Vaccination
+```{r slide 8-9, warning=FALSE}
+
+#Count total death by Continent / Country
+vacc_ct <- dataLocation %>%
+  group_by(continent) %>%
+  summarize(mydata = sum(new_vaccinations_smoothed, na.rm=T))
+death_ct <- dataLocation %>%
+  group_by(continent) %>%
+  summarize(mydata = sum(new_deaths_smoothed, na.rm=T))
+
+#Plot graphs
+g1 <- ggplot(data = death_ct) + 
+  geom_col(aes(x=continent, y=mydata, fill=continent)) +
+  ggtitle("No. of deaths by Continent") +
+  xlab("Continent") + ylab("No. of people") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+g2 <- ggplot(data = vacc_ct) + 
+  geom_col(aes(x=continent, y=mydata, fill=continent)) +
+  ggtitle("No. of Vaccinated people by Continent") +
+  xlab("Continent") + ylab("No. of people") +
+  theme(plot.title = element_text(hjust = 0.5))
+g1
+g2
+```
+
+
+Slide 10-11: Global Map
+```{r slide 10-11, warning=FALSE}
+#Graph the world map, import required libraries
+if("maps" %in% rownames(installed.packages()) == FALSE)
+  install.packages("maps")
+library(maps)
+if("RColorBrewer" %in% rownames(installed.packages()) == FALSE)
+  install.packages("RColorBrewer")
+library(RColorBrewer)
+if("forcats" %in% rownames(installed.packages()) == FALSE)
+  install.packages("forcats")
+library(forcats)
+
+#Create world map
+world_map <- map_data(map = "world")
+world_map$region <- iso.alpha(world_map$region, n=3) # Convert region code to ISO code 3 digit
+
+#Prepare data - Total deaths percentage by location
+df <- dataLocation %>%
+  select(iso_code, total_deaths, population) %>%
+  filter(total_deaths >= 0) %>%
+  group_by(iso_code) %>%
+  summarize(data = max(100*(total_deaths/population), na.rm=T))
+
+#Define map scales
+df$data_scale <- cut(df$data,
+                      breaks = c(-Inf, 0.005, 0.01, 0.05, 0.1, 0.3, 0.5, Inf), 
+                      labels = c("Less than 0.005%", "0.01%-0.005%", "0.05%-0.01%", 
+                                 "0.1%-0.05%", "0.3%-0.1%", "0.5-0.3%", "More than 0.5%"))
+#Plot the map of death %, with 7 level scales in red, country border in black and do not fill area
+ggplot(df) +
+  geom_map(aes(map_id = iso_code, fill = fct_rev(data_scale)), map = world_map) +
+  geom_polygon(data = world_map, aes(x = long, y = lat, group = group), colour = 'black', fill = NA) +
+  expand_limits(x = world_map$long, y = world_map$lat) +
+  scale_fill_manual(name = "Total Deaths %", values = rev(brewer.pal(7, name = "Reds"))) +
+  theme_void() +
+  coord_fixed()
+
+#Vaccinated people % by location
+df <- dataLocation %>%
+  select(iso_code, people_vaccinated, population) %>%
+  filter(people_vaccinated >= 0) %>%
+  group_by(iso_code) %>%
+  summarize(data = max(people_vaccinated/population, na.rm=T))
+
+df$data_scale <- cut(df$data, 
+                     breaks = c(-Inf, 0.05, 0.1, 0.2, 0.4, 0.6, 0.9, Inf), 
+                     labels = c("Less than 5%", "10%-5%", "20%-10%", "40%-20%", 
+                                "60%-40%", "90%-60%", "More than 90%"))
+
+world_map <- map_data(map = "world")
+world_map$region <- iso.alpha(world_map$region, n=3)
+
+ggplot(df) +
+  geom_map(aes(map_id = iso_code, fill = fct_rev(data_scale)), map = world_map) +
+  geom_polygon(data = world_map, aes(x = long, y = lat, group = group), colour = 'black', fill = NA) +
+  expand_limits(x = world_map$long, y = world_map$lat) +
+  scale_fill_manual(name = "Vaccination %", values = rev(brewer.pal(7, name = "Greens"))) +
+  theme_void() +
+  coord_fixed()
+```
+
+
+Slide 12: Global Distribution of total cases
+```{r slide 12, warning=FALSE}
+#Pie chart of total cases as at 2020-12-31 by continents
+ds_year_end_20<-ds %>% 
+  filter(date=="2020-12-31") %>% 
+  filter(location %in% c("Africa", "Asia", "Europe", "North America", "Oceania", "South America")
+  ) %>%
+  select("continent", "location", "date", "total_cases") %>% 
+  mutate(percentage_total_cases=round(total_cases/sum(total_cases)*100, digits=0))
+
+data_Pie_2020<-data.frame("category"=ds_year_end_20$location, 
+                          "amount"=ds_year_end_20$percentage_total_cases)
+
+Pie_A<-ggplot(data_Pie_2020, aes(x="", y=amount, fill=category)) +
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y", start=0)+
+  geom_text(aes(label = paste0(amount,"%" )), position = position_stack(vjust=0.5)) +
+  labs(x = NULL, y = NULL, fill = NULL) +
+  theme_classic() +
+  theme(axis.line = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())+
+  ggtitle('Proportion of total cases in different continents in 2020')
+
+#Pie chart of total cases as at 2021-12-31 by continents
+ds_year_end_21<-ds %>% 
+  filter(date=="2021-12-31") %>% 
+  filter(location %in% c("Africa", "Asia", "Europe", "North America", "Oceania", "South America")
+  ) %>% 
+  select("continent", "location", "date", "total_cases") %>% 
+  mutate(percentage_total_cases=round(total_cases/sum(total_cases)*100, digits=0))
+
+data_Pie_2021<-data.frame("category"=ds_year_end_21$location, 
+                          "amount"=ds_year_end_21$percentage_total_cases)
+
+Pie_b<-ggplot(data_Pie_2021, aes(x="", y=amount, fill=category)) +
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y", start=0)+
+  geom_text(aes(label = paste0(amount,"%" )), position = position_stack(vjust=0.5)) +
+  labs(x = NULL, y = NULL, fill = NULL) +
+  theme_classic() +
+  theme(axis.line = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())+
+  ggtitle('Proportion of total cases in different continents in 2021')
+
+#Pie chart of total cases as at 2022-3-31 by continents, being the cut off date of data
+ds_period_end_22<-ds %>% 
+  filter(date=="2022-3-31") %>% 
+  filter(location %in% c("Africa", "Asia", "Europe", "North America", "Oceania", "South America")
+  ) %>% 
+  select("continent", "location", "date", "total_cases") %>% 
+  mutate(percentage_total_cases=round(total_cases/sum(total_cases)*100, digits=0))
+
+data_Pie_2022<-data.frame("category"=ds_period_end_22$location, 
+                          "amount"=ds_period_end_22$percentage_total_cases)
+
+Pie_c<-ggplot(data_Pie_2022, aes(x="", y=amount, fill=category)) +
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y", start=0)+
+  geom_text(aes(label = paste0(amount,"%" )), position = position_stack(vjust=0.5)) +
+  labs(x = NULL, y = NULL, fill = NULL) +
+  theme_classic() +
+  theme(axis.line = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())+
+  ggtitle('Proportion of total cases in different continents in 2022')
+
+grid.arrange(Pie_A,Pie_b,Pie_c, nrow=1)
+```
+
+
+Slide 13:Asia Data
+```{r slide 13, warning = FALSE}
+#Prepare Data
+ct <- "Asia"
+vacc_loc <- dataLocation %>%
+  filter(continent == ct) %>%
+  group_by(location) %>%
+  summarize(mydata = sum(new_vaccinations_smoothed, na.rm=T))
+death_loc <- dataLocation %>%
+  filter(continent == ct) %>%
+  group_by(location) %>%
+  summarize(mydata = sum(new_deaths_smoothed, na.rm=T))
+
+#Plot the graphs
+g1 <- ggplot(data = death_loc) +
+  geom_col(aes(x=location, y=mydata, fill=location)) + 
+  ggtitle("No. of deaths in Asia") +
+  xlab("Location") + ylab("No. of people") +
+  #theme(plot.title = element_text(hjust = 0.5)) +
+  coord_flip() +
+  theme(legend.position="none")
+
+g2 <- ggplot(data = vacc_loc) +
+  geom_col(aes(x=location, y=mydata, fill=location)) + 
+  ggtitle("No. of vaccinated people in Asia") +
+  xlab("Location") + ylab("No. of people") +
+  #theme(plot.title = element_text(hjust = 0.5)) +
+  coord_flip() +
+  theme(legend.position="none")
+
+grid.arrange(g1, g2, nrow=1) # One screen two plots
+```
+
+
+Slide 14 - 15: Focus on Hong Kong
+```{r slide 14-15, warning=FALSE}
+#Prepare data
+
+dataHK <- dataLocation %>%
+  filter(iso_code == "HKG")
+#Plot the number of death vs cases against by date (from a specific date range)
+
+#Select values for plotting graph
+dataHK.p <- dataHK %>% 
+  select(date, new_cases_smoothed, new_tests_smoothed)
+# dataHK.p <- dataHK.p[complete.cases(dataHK.p),] # Select non-NA rows only
+dataHK.p <- na.omit(dataHK.p)
+
+# View(dataHK.p)
+ggplot(data = dataHK.p) + 
+  geom_line(aes(x=date, y=new_tests_smoothed), colour="red") +
+  geom_line(aes(x=date, y=new_cases_smoothed), colour="blue") +
+  scale_x_date(limit=c(as.Date("2021-03-01"), as.Date("2022-03-31"))) +
+  ggtitle("Case and death against date in HK") +
+  xlab("Date") + ylab("COVID19 Cases and Death") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_color_manual(values = c("red", "blue"))
+
+#Graph the total cases and vaccinations, preparing data
+dataHK.p2 <- dataHK %>%
+  select(date, total_cases, total_vaccinations, new_tests_smoothed, total_deaths)
+
+# nrow(dataHK.p2)
+# View(dataHK.p2)
+# Plot some simple graphs about HK (cases/vaccinations/tests/deaths)
+g1 <- ggplot(data = dataHK.p2) +
+  geom_line(aes(x=date, y=total_cases), colour="red") + labs(title="cases vs date")
+g2 <- ggplot(data = dataHK.p2) +
+  geom_line(aes(x=date, y=total_vaccinations), colour="blue") + labs(title="vaccinations vs date")
+g3 <- ggplot(data = dataHK.p2) +
+  geom_line(aes(x=date, y=new_tests_smoothed), colour="black")+ labs(title="new tests vs date")
+g4 <- ggplot(data = dataHK.p2) +
+  geom_line(aes(x=date, y=total_deaths), colour="green") + labs(title="total deaths vs date")
+grid.arrange(g1, g2, g3, g4, nrow=2, ncol=2)
+```
+
+
+Slide 16 - 17: Comparing HK with Other Developed Countries in Asia
+```{r slide 16-17, warning= FALSE}
+#Prepare Data
+loc <- c("HKG", "TWN", "SGP", "KOR", "JPN", "MYS")
+analysis <- c("new_cases_smoothed_per_million", "new_vaccinations_smoothed_per_million", 
+              "new_tests_smoothed_per_thousand", "new_deaths_smoothed_per_million")
+dataSel <- dataLocation %>%
+  select(iso_code, location, date, any_of(analysis)) %>%
+  filter(iso_code %in% loc)
+
+dataSel <- na.omit(dataSel) # Remove NA
+
+#Plot the graphs
+g1 <- ggplot() +
+  geom_line(data = filter(dataSel, iso_code == "HKG"), aes(x=date, y=new_cases_smoothed_per_million, group=iso_code, colour=iso_code)) +
+  geom_line(data = filter(dataSel, iso_code == "TWN"), aes(x=date, y=new_cases_smoothed_per_million, group=iso_code, colour=iso_code)) +
+  geom_line(data = filter(dataSel, iso_code == "SGP"), aes(x=date, y=new_cases_smoothed_per_million, group=iso_code, colour=iso_code)) +
+  geom_line(data = filter(dataSel, iso_code == "KOR"), aes(x=date, y=new_cases_smoothed_per_million, group=iso_code, colour=iso_code)) +
+  geom_line(data = filter(dataSel, iso_code == "JPN"), aes(x=date, y=new_cases_smoothed_per_million, group=iso_code, colour=iso_code)) +
+  geom_line(data = filter(dataSel, iso_code == "MYS"), aes(x=date, y=new_cases_smoothed_per_million, group=iso_code, colour=iso_code)) +
+  labs(title="New cases against date")
+g2 <- ggplot() +
+  geom_line(data = filter(dataSel, iso_code == "HKG"), aes(x=date, y=new_vaccinations_smoothed_per_million, group=iso_code, colour=iso_code)) +
+  geom_line(data = filter(dataSel, iso_code == "TWN"), aes(x=date, y=new_vaccinations_smoothed_per_million, group=iso_code, colour=iso_code)) +
+  geom_line(data = filter(dataSel, iso_code == "SGP"), aes(x=date, y=new_vaccinations_smoothed_per_million, group=iso_code, colour=iso_code)) +
+  geom_line(data = filter(dataSel, iso_code == "KOR"), aes(x=date, y=new_vaccinations_smoothed_per_million, group=iso_code, colour=iso_code)) +
+  geom_line(data = filter(dataSel, iso_code == "JPN"), aes(x=date, y=new_vaccinations_smoothed_per_million, group=iso_code, colour=iso_code)) +
+  geom_line(data = filter(dataSel, iso_code == "MYS"), aes(x=date, y=new_vaccinations_smoothed_per_million, group=iso_code, colour=iso_code)) +
+  labs(title="New vaccinations against date")
+g3 <- ggplot() +
+  geom_line(data = filter(dataSel, iso_code == "HKG"), aes(x=date, y=new_tests_smoothed_per_thousand, group=iso_code, colour=iso_code)) +
+  geom_line(data = filter(dataSel, iso_code == "TWN"), aes(x=date, y=new_tests_smoothed_per_thousand, group=iso_code, colour=iso_code)) +
+  geom_line(data = filter(dataSel, iso_code == "SGP"), aes(x=date, y=new_tests_smoothed_per_thousand, group=iso_code, colour=iso_code)) +
+  geom_line(data = filter(dataSel, iso_code == "KOR"), aes(x=date, y=new_tests_smoothed_per_thousand, group=iso_code, colour=iso_code)) +
+  geom_line(data = filter(dataSel, iso_code == "JPN"), aes(x=date, y=new_tests_smoothed_per_thousand, group=iso_code, colour=iso_code)) +
+  geom_line(data = filter(dataSel, iso_code == "MYS"), aes(x=date, y=new_tests_smoothed_per_thousand, group=iso_code, colour=iso_code)) +
+  labs(title="New tests against date")
+g4 <- ggplot() +
+  geom_line(data = filter(dataSel, iso_code == "HKG"), aes(x=date, y=new_deaths_smoothed_per_million, group=iso_code, colour=iso_code)) +
+  geom_line(data = filter(dataSel, iso_code == "TWN"), aes(x=date, y=new_deaths_smoothed_per_million, group=iso_code, colour=iso_code)) +
+  geom_line(data = filter(dataSel, iso_code == "SGP"), aes(x=date, y=new_deaths_smoothed_per_million, group=iso_code, colour=iso_code)) +
+  geom_line(data = filter(dataSel, iso_code == "KOR"), aes(x=date, y=new_deaths_smoothed_per_million, group=iso_code, colour=iso_code)) +
+  geom_line(data = filter(dataSel, iso_code == "JPN"), aes(x=date, y=new_deaths_smoothed_per_million, group=iso_code, colour=iso_code)) +
+  geom_line(data = filter(dataSel, iso_code == "MYS"), aes(x=date, y=new_deaths_smoothed_per_million, group=iso_code, colour=iso_code)) +
+  labs(title="New deaths against date")
+
+grid.arrange(g1, g4, nrow=2)
+grid.arrange(g3, g2, nrow=2)
+```
+
+
+Slide 18: Mortality Rate Comparison
+```{r slide 18, warning=FALSE}
+# Get Constant stats for each location
+dataLocationCons <- ds %>%
+  filter(date=="2021-12-31") %>%
+  select(contains("per"),population_density) %>%
+  select(-starts_with("new"))%>%
+  select(-starts_with("weekly")) %>%
+  mutate(mortality_rate=total_deaths_per_million/total_cases_per_million)
+newdf<-dataLocationCons[!is.na(dataLocationCons$mortality_rate),]
+# View(newdf)
+
+# Location Mortality Rate
+dataLocMR <- ds %>%
+  filter(date=="2022-04-15")%>%
+  mutate(mortalityrate=total_deaths_per_million/total_cases_per_million)%>%
+  filter(!mortalityrate==0) %>%
+  mutate(meanMR=mean(mortalityrate))
+View(dataLocMR)
+
+g<-ggplot(data=dataLocMR,
+       mapping=aes(x=location,y=mortalityrate,color=continent))+
+  geom_col()+
+  coord_flip()+
+  theme(axis.text.x = element_text(size = 6, vjust = 0.5, hjust = 0.5, angle = 45))+
+  theme(axis.text.y = element_text(size = 2, vjust = 0.5, hjust = 0.5))
+
+g+geom_point(data=dataLocMR,
+            mapping=aes(x=location, y=meanMR,color="red",))+
+  theme(legend.position = "none")
+```
+
+
+<b>Part 2: Correlation and regression analysis</b>
+
+
+Slide 19: Herd Immunity
+```{r slide 19, warning=FALSE}
+# Get vaccination stats for each location
+dataLocationVac <- dataLocation %>%
+  select(iso_code,location,date,total_cases,total_deaths,
+         continent,contains("vaccinations") |contains( "vaccinated"), contains("booster"))%>%
+  mutate(mortality_rate=total_deaths/total_cases)
+
+dataLocationVacN<-na.omit(dataLocationVac) #remove the locations not reporting vaccination data
+
+LocListVac <- dataLocationVacN %>%
+  group_by(location)%>%
+  summarize(num=n())%>%
+  filter(num>=300)%>%
+  select(location) #to focus on countries reporting vaccination data more consistently
+
+LocListVac <- unlist(LocListVac) #change list to character
+
+# Mutate new variable to reflect herd immunity  
+df2<- ds %>%
+  filter(location %in% LocListVac) %>%
+  select(location,date,total_cases_per_million) %>%
+  rename(total_cases_per_million_T7=total_cases_per_million) # create a temp dataframe to save T-7 cases stat
+
+dataLocationVacN2 <- dataLocationVacN %>%
+  mutate(T7=date-7)
+
+dataLocationHI <- left_join(dataLocationVacN2,df2,by=c('location'='location','T7'='date')) #add T-7 cases number to the original df
+dataLocationHI <- dataLocationHI %>%
+  mutate(HI=total_cases_per_million_T7/10000+people_vaccinated_per_hundred)%>%
+  filter(location %in% LocListVac)
+
+g31<- ggplot(dataLocationHI,
+             aes(x=HI, y=mortality_rate, group=location))+
+  geom_point(aes(color=date))+
+  facet_wrap(~location)
+g31
+```
+
+
+Slide 20: Elder Population % - defer to Earnest
+```{r slide 20, message=FALSE, warning = FALSE}
+#Bubble plot of average death rates vs percentage of elderly
+daily_death_rate<-dataLocation %>% 
+  select("continent", "location", "date", "total_cases", "total_deaths", "people_vaccinated_per_hundred", "population", "population_density", "aged_65_older") %>% 
+  mutate(death_rate=total_deaths/total_cases*100)
+
+avg_death_rate_location<-daily_death_rate %>% 
+  group_by(location, continent) %>% 
+  summarise(`Average death rates (%)`=round(mean(death_rate, na.rm = TRUE), digits=3), population=mean(population), `Percentage of population with age 65 or above (%)`=mean(aged_65_older)) 
+
+ggplot(avg_death_rate_location, aes(x=`Percentage of population with age 65 or above (%)`, y=`Average death rates (%)`, size = population, color=continent)) +
+  geom_point(alpha=0.5)
+```
+
+
+Slide 21-23: Examine the relation between diff factors and mortality rate
+```{r slide 21-23, message=FALSE, warning = FALSE}
+library(naniar)
+
+factors_missing <- dataLocMR %>%
+  miss_var_summary() # to identify amount of missing data for each factor
+
+factors_not_missing <- factors_missing %>%
+  filter(pct_miss<=50) %>%
+  select(variable)
+
+indexfactors<-c("location","total_cases_per_million","mortalityrate","continent")
+econfactors <- c("human_development_index","extreme_poverty","gdp_per_capita")
+hcfactors<-c("hospital_beds_per_thousand","diabetes_prevalence","cardiovasc_death_rate" )
+demofactors <- c("median_age","population_density","life_expectancy")
+
+# test economic factors
+dataEconTest <- dataLocMR%>%
+  select(econfactors,indexfactors)
+
+g11 <- ggplot(data=dataEconTest,
+              mapping=aes(x=human_development_index,y=mortalityrate))+
+  geom_point(aes(color=continent))+
+  geom_smooth(na.rm=T)+
+  theme(legend.position = "none")
+
+g12 <- ggplot(data=dataEconTest,
+              mapping=aes(x=gdp_per_capita,y=mortalityrate))+
+  geom_point(aes(color=continent))+
+  geom_smooth(na.rm=T)+
+  theme(legend.position = "none",axis.title.y=element_blank())
+
+g13<- ggplot(data=dataEconTest,
+             mapping=aes(x=extreme_poverty,y=mortalityrate))+
+  geom_point(aes(color=continent))+
+  geom_smooth(na.rm=T)+
+  theme(axis.title.y=element_blank())
+
+grid.arrange(g11,g12,g13,nrow=1)
+
+
+# test healthcare factors
+dataHCTest <- dataLocMR%>%
+  select(hcfactors,indexfactors)
+
+g21 <- ggplot(data=dataHCTest,
+              mapping=aes(x=hospital_beds_per_thousand,y=mortalityrate))+
+  geom_point(aes(color=continent))+
+  geom_smooth(na.rm=T)+
+  theme(legend.position = "none")
+
+g22 <- ggplot(data=dataHCTest,
+              mapping=aes(x=diabetes_prevalence,y=mortalityrate))+
+  geom_point(aes(color=continent))+
+  geom_smooth(na.rm=T)+
+  theme(legend.position = "none",axis.title.y=element_blank())
+
+g23 <- ggplot(data=dataHCTest,
+              mapping=aes(x=cardiovasc_death_rate,y=mortalityrate))+
+  geom_point(aes(color=continent))+
+  geom_smooth(na.rm=T)+
+  theme(axis.title.y=element_blank())
+
+grid.arrange(g21,g22,g23,nrow=1)
+
+# test demographic factors
+dataDemoTest <- dataLocMR%>%
+  select(demofactors,indexfactors)
+
+g31 <- ggplot(data=dataDemoTest,
+              mapping=aes(x=median_age,y=mortalityrate))+
+  geom_point(aes(color=continent))+
+  geom_smooth(na.rm=T)+
+  theme(legend.position = "none")
+
+g32 <- ggplot(data=dataDemoTest,
+              mapping=aes(x=population_density,y=mortalityrate))+
+  geom_point(aes(color=continent))+
+  geom_smooth(na.rm=T)+
+  theme(legend.position = "none",axis.title.y=element_blank())
+
+g33 <- ggplot(data=dataDemoTest,
+              mapping=aes(x=life_expectancy,y=mortalityrate))+
+  geom_point(aes(color=continent))+
+  geom_smooth(na.rm=T)+
+  theme(axis.title.y=element_blank())
+
+grid.arrange(g31,g32,g33,nrow=1)
+```
+
+
+Slide 24: Linear Regression
+```{r slide 24, warning = FALSE}
+fit <- lm(mortalityrate ~ human_development_index+gdp_per_capita+hospital_beds_per_thousand+median_age+life_expectancy,data=dataLocMR)
+
+summary(fit)
+```
+
+
+Slide 25: Decision Tree on Mortality Rate
+```{r slide 25, warning = FALSE, message=FALSE}
+#Import required libraries
+if("caret" %in% rownames(installed.packages()) == FALSE)
+  install.packages("caret")
+library(caret)
+if("rpart" %in% rownames(installed.packages()) == FALSE)
+  install.packages("rpart")
+library(rpart)
+
+# Library for plot beautiful decision tree
+if("rattle" %in% rownames(installed.packages()) == FALSE)
+  install.packages("rattle")
+library(rattle)
+
+# Prepare Data
+df <- ds %>%
+  filter(!grepl('^OWID.*',iso_code))  %>% 
+  filter(date >= '2020-03-01' & date <= '2022-03-31')
+df <- df %>%
+  select(new_deaths_smoothed_per_million, stringency_index, icu_patients_per_million, hosp_patients_per_million, weekly_icu_admissions_per_million,
+         weekly_hosp_admissions_per_million, population_density, median_age, aged_65_older, aged_70_older, gdp_per_capita, 
+         extreme_poverty, cardiovasc_death_rate, diabetes_prevalence, female_smokers, male_smokers, handwashing_facilities,
+         hospital_beds_per_thousand, human_development_index)
+# df <- do.call(data.frame, lapply(df, function(x) replace(x, is.infinite(x), NA)))
+# View(df)
+# na.omit(df)
+# df[ , colSums(is.na(df)) == 0]
+# Factor the death rate by mean + 1 std dev.
+factor_mean <- mean(df$new_deaths_smoothed_per_million, na.rm=T) # + sd(df$new_deaths_smoothed_per_million, na.rm=T)
+
+df$is_high <- ifelse(df$new_deaths_smoothed_per_million > factor_mean, 1, 0) # 1 = high death rate, 0 = low death rate
+df <- df %>% drop_na(is_high)
+df$is_high <- factor(df$is_high)
+#
+df <- df[-1] # Remove source factor column
+
+set.seed(10)  # fix the randomizer
+inTraining <- createDataPartition(df$is_high, p = 0.75, list = FALSE) 
+
+training <- df[inTraining,] #75% data for model training  
+testing <- df[-inTraining,] #25% for model testing
+
+# nrow(df); nrow(training); nrow(testing)
+
+fit <- rpart(is_high ~ ., data=training, method="class", 
+             parms=list(split="information"))
+# summary(fit)
+
+pred <- predict(fit, type="class", newdata=testing)   # Predict Class
+ConfusionMatrix <- table(pred, testing$is_high)      # Confusion Matrix Table
+ConfusionMatrix
+sum(diag(ConfusionMatrix))/sum(ConfusionMatrix)       # calculate the accuracy
+
+#Plot the decision tree, black line, yes/no decision
+fancyRpartPlot(fit, yesno=2, split.col="black", nn.col="black", 
+               caption="", palette="Set2", branch.col="black")
+```
+
+
+Slide 26-29: Examine the relation between diff factors and new cases rate
+```{r slide 26-29,warning=FALSE}
+#Prepare new data, customize the date range
+ds1 <- ds %>%
+  filter(!grepl('^OWID.*',iso_code)) %>% 
+  filter(date >= '2020-03-01' & date <= '2022-03-31')
+
+# Selected factors to analysis
+ds1 <- ds1 %>% 
+  select(location, total_cases_per_million, stringency_index, icu_patients_per_million, hosp_patients_per_million, weekly_icu_admissions_per_million,
+         weekly_hosp_admissions_per_million, population_density, median_age, aged_65_older, aged_70_older, gdp_per_capita, 
+         extreme_poverty, cardiovasc_death_rate, diabetes_prevalence, female_smokers, male_smokers, handwashing_facilities,
+         hospital_beds_per_thousand, human_development_index) %>%
+  group_by(location) %>%
+  summarise_if(is.numeric, max, na.rm=T) # One location one record, use max as grouped data
+# View(ds1)
+ds1 <- do.call(data.frame, lapply(ds1, function(x) replace(x, is.infinite(x), NA))) # Replace infinite value to NA
+# class(ds1)
+
+
+# Graph the correlation on each factors compared to total_cases_per_million
+par(mfrow=c(2,2)) # 2 by 2 in one plot
+plot(ds1$stringency_index, ds1$total_cases_per_million)
+plot(ds1$human_development_index, ds1$total_cases_per_million)
+plot(ds1$gdp_per_capita, ds1$total_cases_per_million)
+plot(ds1$extreme_poverty, ds1$total_cases_per_million)
+#
+par(mfrow=c(3,2))
+plot(ds1$icu_patients_per_million, ds1$total_cases_per_million)
+plot(ds1$hosp_patients_per_million, ds1$total_cases_per_million)
+plot(ds1$weekly_icu_admissions_per_million, ds1$total_cases_per_million)
+plot(ds1$weekly_hosp_admissions_per_million, ds1$total_cases_per_million)
+plot(ds1$hospital_beds_per_thousand, ds1$total_cases_per_million)
+#
+par(mfrow=c(2,2))
+plot(ds1$population_density, ds1$total_cases_per_million)
+plot(ds1$median_age, ds1$total_cases_per_million)
+plot(ds1$aged_65_older, ds1$total_cases_per_million)
+plot(ds1$aged_70_older, ds1$total_cases_per_million)
+#
+par(mfrow=c(3,2))
+plot(ds1$cardiovasc_death_rate, ds1$total_cases_per_million)
+plot(ds1$diabetes_prevalence, ds1$total_cases_per_million)
+plot(ds1$female_smokers, ds1$total_cases_per_million)
+plot(ds1$male_smokers, ds1$total_cases_per_million)
+plot(ds1$handwashing_facilities, ds1$total_cases_per_million)
+
+#Reset plot
+par(mfrow=c(1,1))
+```
+
+
+Slide 30: Correlation matrix
+```{r slide 30, warning = FALSE}
+cor(ds1$stringency_index, ds1$total_cases_per_million, use="na.or.complete")
+cor(ds1$human_development_index, ds1$total_cases_per_million, use="na.or.complete")
+cor(ds1$gdp_per_capita, ds1$total_cases_per_million, use="na.or.complete")
+cor(ds1$extreme_poverty, ds1$total_cases_per_million, use="na.or.complete")
+#
+cor(ds1$icu_patients_per_million, ds1$total_cases_per_million, use="na.or.complete")
+cor(ds1$hosp_patients_per_million, ds1$total_cases_per_million, use="na.or.complete")
+cor(ds1$weekly_icu_admissions_per_million, ds1$total_cases_per_million, use="na.or.complete")
+cor(ds1$weekly_hosp_admissions_per_million, ds1$total_cases_per_million, use="na.or.complete")
+cor(ds1$hospital_beds_per_thousand, ds1$total_cases_per_million, use="na.or.complete")
+#
+cor(ds1$population_density, ds1$total_cases_per_million, use="na.or.complete")
+cor(ds1$median_age, ds1$total_cases_per_million, use="na.or.complete")
+cor(ds1$aged_65_older, ds1$total_cases_per_million, use="na.or.complete")
+cor(ds1$aged_70_older, ds1$total_cases_per_million, use="na.or.complete")
+#
+cor(ds1$cardiovasc_death_rate, ds1$total_cases_per_million, use="na.or.complete")
+cor(ds1$diabetes_prevalence, ds1$total_cases_per_million, use="na.or.complete")
+cor(ds1$female_smokers, ds1$total_cases_per_million, use="na.or.complete")
+cor(ds1$male_smokers, ds1$total_cases_per_million, use="na.or.complete")
+cor(ds1$handwashing_facilities, ds1$total_cases_per_million, use="na.or.complete")
+```
+
+
+Slide 31: Decision Tree on New Cases
+```{r slide 31, warning=FALSE}
+#Prepare data (for new cases rate)
+df <- ds %>%
+  filter(!grepl('^OWID.*',iso_code))  %>% 
+  filter(date >= '2020-03-01' & date <= '2022-03-31')
+df <- df %>% 
+  select(new_cases_smoothed_per_million, stringency_index, icu_patients_per_million, hosp_patients_per_million, weekly_icu_admissions_per_million,
+         weekly_hosp_admissions_per_million, population_density, median_age, aged_65_older, aged_70_older, gdp_per_capita, 
+         extreme_poverty, cardiovasc_death_rate, diabetes_prevalence, female_smokers, male_smokers, handwashing_facilities,
+         hospital_beds_per_thousand, human_development_index)
+
+factor_mean <- mean(df$new_cases_smoothed_per_million, na.rm=T) + sd(df$new_cases_smoothed_per_million, na.rm=T)
+df$is_high <- ifelse(df$new_cases_smoothed_per_million > factor_mean, 1, 0)
+df <- df %>% drop_na(is_high)
+df$is_high <- factor(df$is_high)
+#
+df <- df[-1]
+
+set.seed(10)  # fix the randomizer
+inTraining <- createDataPartition(df$is_high, p = 0.75, list = FALSE)
+# Split data in 75%-25% ratio
+
+training <- df[inTraining,] #75% data for model training  
+testing <- df[-inTraining,] #25% for model testing
+
+# nrow(df); nrow(training); nrow(testing)
+# Build decision tree (new cases)
+fit <- rpart(is_high ~ ., data=training, method="class", 
+             parms=list(split="information"))
+# summary(fit)
+
+pred <- predict(fit, type="class", newdata=testing)   # Predict Class
+ConfusionMatrix <- table(pred, testing$is_high)      # Confusion Matrix Table
+ConfusionMatrix
+sum(diag(ConfusionMatrix))/sum(ConfusionMatrix)       # calculate the accuracy
+# Plot the decision tree
+fancyRpartPlot(fit, yesno=2, split.col="black", nn.col="black", 
+               caption="", palette="Set2", branch.col="black")
+```
+
+<b>Part 3: Prediction on Hong Kong 5th wave</b>
+
+Prepare data
+```{r part 3 data prep}
+ds_hk <- ds %>%
+  filter(iso_code %in% c("HKG"))
+
+ds_hk$date <- as.Date(ds_hk$date, "%Y-%m-%d") # Convert date from string to Date() type
+
+# Parameters test (debug only)
+# period <- 90
+# forecast <- 30
+# end_date <- summarise(ds_hk, date = max(date))
+# end_date <- end_date[1,1]
+# start_date <- end_date - period
+# class(start_date)
+
+# ds2 <-na.omit(ds2)
+# View(ds2)
+# str(ds2)
+```
+
+
+Slide 32: Prepare data for building regression model using no.2-4 COVID-19 waves in HK
+```{r slide 32}
+# 4th wave
+wave4 <- ds_hk %>%
+  select(date, new_cases_smoothed) %>%
+  filter(date>="2020-11-15" & date<="2021-02-15")
+
+# 3rd wave
+wave3 <- ds_hk %>%
+  select(date, new_cases_smoothed) %>%
+  filter(date>="2020-07-01" & date<="2020-09-10")
+
+# 2nd wave
+wave2 <- ds_hk %>%
+  select(date, new_cases_smoothed) %>%
+  filter(date>="2020-03-01" & date<="2020-04-30")
+
+g1 <- ggplot(data=wave4) +
+  geom_line(aes(x=date, y=new_cases_smoothed)) +
+  ggtitle("Wave 4th")
+g2 <- ggplot(data=wave3) +
+  geom_line(aes(x=date, y=new_cases_smoothed)) +
+  ggtitle("Wave 3rd")
+g3 <- ggplot(data=wave2) +
+  geom_line(aes(x=date, y=new_cases_smoothed)) +
+  ggtitle("Wave 2nd")
+
+grid.arrange(g3,g2,g1, ncol=3, nrow=1) # Plot 3 waves graphs to find suitable model
+```
+
+Slide 33: \
+Prepare regression function \
+Define a Gaussian function (of four parameters) \
+Ref: https://en.wikipedia.org/wiki/Gaussian_function
+```{r slide 33, warning=FALSE}
+f <- function(x, theta)  { 
+  m <- theta[1]; s <- theta[2]; a <- theta[3]; b <- theta[4];
+  a*exp(-0.5*((x-m)/s)^2) + b
+}
+```
+
+
+Slide 34: Regression the HK 2nd wave 
+```{r Slide 34, warning=FALSE}
+wave2$num_days <- round(as.numeric(difftime(wave2$date, "2020-03-01" ,units="days"))) # Change date to number of days
+
+x <- wave2$num_days
+y <- wave2$new_cases_smoothed
+
+# Estimate some starting values
+m.0 <- x[which.max(y)]; s.0 <- (max(x)-min(x))/4; b.0 <- min(y); a.0 <- (max(y)-min(y))
+
+# Do the fit
+fit2 <- nls(y ~ f(x,c(m,s,a,b)), data.frame(x,y), start=list(m=m.0, s=s.0, a=a.0, b=b.0))
+
+# Display the estimated location of the peak and its SE
+# summary(fit2)$parameters["m", 1:2]
+summary(fit2)
+
+# Graph the estimated curve and real data point
+par(mfrow=c(1,1))
+plot(c(x,0),c(y,f(coef(fit2)["m"],coef(fit2))), main="COVID19 HK 2nd wave regression", type="n",
+     xlab="number of days", ylab="New cases")
+curve(f(x, coef(fit2)), add=TRUE, col="Red", lwd=2)
+points(x,y, pch=19)
+```
+
+
+Slide 35: Regression 3rd wave
+```{r slide 35, warning=FALSE}
+wave3$num_days <- round(as.numeric(difftime(wave3$date, "2020-07-01" ,units="days")))
+
+x <- wave3$num_days
+y <- wave3$new_cases_smoothed
+
+# Estimate some starting values
+m.0 <- x[which.max(y)]; s.0 <- (max(x)-min(x))/4; b.0 <- min(y); a.0 <- (max(y)-min(y))
+
+# Do the fit
+fit3 <- nls(y ~ f(x,c(m,s,a,b)), data.frame(x,y), start=list(m=m.0, s=s.0, a=a.0, b=b.0))
+
+# Display the estimated location of the peak and its SE
+# summary(fit3)$parameters["m", 1:2]
+summary(fit3)
+
+# Graph the estimated curve and real data point
+par(mfrow=c(1,1))
+plot(c(x,0),c(y,f(coef(fit3)["m"],coef(fit3))), main="COVID19 HK 3rd wave regression", type="n",
+     xlab="number of days", ylab="New cases")
+curve(f(x, coef(fit3)), add=TRUE, col="Red", lwd=2)
+points(x,y, pch=19)
+```
+
+
+Slide 36: Regression 4th wave 
+```{r slide 36, warning = FALSE}
+wave4$num_days <- round(as.numeric(difftime(wave4$date, "2020-11-15" ,units="days")))
+
+x <- wave4$num_days
+y <- wave4$new_cases_smoothed
+
+# Estimate some starting values
+m.0 <- x[which.max(y)]; s.0 <- (max(x)-min(x))/4; b.0 <- min(y); a.0 <- (max(y)-min(y))
+
+# Do the fit
+
+fit4 <- nls(y ~ f(x,c(m,s,a,b)), data.frame(x,y), start=list(m=m.0, s=s.0, a=a.0, b=b.0))
+
+# Display the estimated location of the peak and its SE
+# summary(fit4)$parameters["m", 1:2]
+summary(fit4)
+# plot(x, resid(fit4), main="Residuals")
+
+# Graph the estimated curve and real data point
+par(mfrow=c(1,1))
+plot(c(x,0),c(y,f(coef(fit4)["m"],coef(fit4))), main="COVID19 HK 4th wave regression", type="n",
+     xlab="number of days", ylab="New cases")
+curve(f(x, coef(fit4)), add=TRUE, col="Red", lwd=2)
+points(x,y, pch=19)
+```
+
+Slide 37: \
+Prediction based on above regression fits \
+HK Wave 5 data, choose 2022-1-31 as start date \
+Training data end at 2022-3-31, will use latest data for prediction
+```{r slide 37, warning = FALSE}
+wave5 <- ds_hk %>%
+  select(date, new_cases_smoothed) %>%
+  filter(date>="2022-01-31" & date<="2022-04-15")
+
+wave5$num_days <- round(as.numeric(difftime(wave5$date, "2022-01-31" ,units="days")))
+
+# Predict use fit of 2nd wave
+new_cases2 = predict(fit2, wave5, interval = "prediction")
+
+# Predict use fit of 3rd wave
+new_cases3 = predict(fit3, wave5, interval = "prediction")
+
+# Predict use fit of 4th wave
+new_cases4 = predict(fit4, wave5, interval = "prediction")
+
+# Plot all the above prediction together and the real data of 5th wave 
+plot(wave5$num_days[1:length(new_cases2)], new_cases2, type="l", col="green", xlab="", ylab="")
+par(new=TRUE)
+plot(wave5$num_days[1:length(new_cases3)], new_cases3, type="l", col="orange", xlab="", ylab="")
+par(new=TRUE)
+plot(wave5$num_days[1:length(new_cases4)], new_cases4, type="l", col="red", xlab="", ylab="")
+par(new=TRUE)
+plot(wave5$num_days, wave5$new_cases_smoothed, col="blue", xlab="Number of days", ylab="New cases", main="Regression fit curve to 5th wave from 2-4 waves")
+```
+
+<b>*** End ***</b>
